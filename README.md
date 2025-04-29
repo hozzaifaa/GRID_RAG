@@ -140,18 +140,6 @@ Your browser will open automatically or show a local link (e.g., http://localhos
 
 ---
 
-## 🧠 Document-Based vs Model-Based Answering
-
-**With Documents (Figure 1)**:  
-> “RFI stands for Radio Frequency Interference, a type of electromagnetic disturbance that can disrupt or interfere with radio and wireless communications.”
-
-**Without Documents (Figure 2)**:  
-> “RFI stands for Radio Frequency Interference, which is unwanted electrical or radio signals that can disrupt, obstruct, or otherwise interfere with correct operation of electronic devices using radio or wireless communication.”
-
-This illustrates how document-grounded answers differ from generic model responses.
-
----
-
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
