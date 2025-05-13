@@ -1,20 +1,23 @@
+# main.py
 import os
 import shutil
 import time
 import gc
 import stat
+import json
 
 from chromadb.config import Settings as ChromaSettings
 
 from langchain_ollama import ChatOllama
 from langchain_chroma import Chroma
-from langchain_community.embeddings import FastEmbedEmbeddings
+from langchain_community.embeddings import FastEmbedEmbeddings  # You can swap this if needed
 from langchain.schema.output_parser import StrOutputParser
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.prompts import PromptTemplate
 from langchain_community.vectorstores.utils import filter_complex_metadata
+from langchain_core.documents import Document
 
 VECTOR_DB_PATH = os.path.join("vectorstores", "default")
 UPLOADED_FILES_LOG = os.path.join(VECTOR_DB_PATH, "files.txt")
@@ -26,12 +29,10 @@ class ChatPDF:
         self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1024, chunk_overlap=100)
         self.prompt = PromptTemplate.from_template(
             """
-            <s> [INST] You are an assistant for question-answering tasks. Use the following pieces of retrieved context 
-            to answer the question. If you don't know the answer, just say that you don't know. Use three sentences
-             maximum and keep the answer concise. [/INST] </s> 
-            [INST] Question: {question} 
-            Context: {context} 
-            Answer: [/INST]
+            <s> [INST] Sei un assistente multilingue per compiti di domanda-risposta. Utilizza solo il contesto fornito per rispondere alla domanda nella stessa lingua in cui è stata posta. Se non conosci la risposta, dì chiaramente che non è disponibile nel contesto. [/INST] </s>
+            [INST] Domanda: {question}
+            Contesto: {context}
+            Risposta: [/INST]
             """
         )
         self.db_path = VECTOR_DB_PATH
@@ -44,7 +45,7 @@ class ChatPDF:
         return ChromaSettings(
             persist_directory=self.db_path,
             allow_reset=True,
-            anonymized_telemetry=False  # ✅ correct, safe setting
+            anonymized_telemetry=False
         )
 
     def _load_vector_store(self):
@@ -56,7 +57,7 @@ class ChatPDF:
             )
             self.retriever = self.vector_store.as_retriever(
                 search_type="similarity_score_threshold",
-                search_kwargs={"k": 3, "score_threshold": 0.5},
+                search_kwargs={"k": 5, "score_threshold": 0.3},
             )
             self.chain = (
                 {"context": self.retriever, "question": RunnablePassthrough()}
@@ -65,13 +66,43 @@ class ChatPDF:
                 | StrOutputParser()
             )
 
-    def ingest(self, pdf_file_path: str):
+    def ingest(self, file_path: str):
         os.makedirs(self.db_path, exist_ok=True)
-        docs = PyPDFLoader(file_path=pdf_file_path).load()
+
+        ext = os.path.splitext(file_path)[-1].lower()
+        docs = []
+
+        if ext == ".pdf":
+            docs = PyPDFLoader(file_path=file_path).load()
+
+        elif ext == ".json":
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if "defectList" not in data:
+                raise ValueError("This JSON file is not in the expected defect format.")
+
+            for defect in data["defectList"]:
+                content = "\n".join([
+                    f"Catalog: {defect.get('catalog', '')}",
+                    f"Type: {defect.get('type', '')}",
+                    f"Measure: {defect.get('measure', '')}",
+                    f"ID: {defect.get('id', '')}",
+                    f"Custom Info: {json.dumps(defect.get('customData', {}))}",
+                    f"Polyline: {defect.get('poly', '')[:100]}..."
+                ])
+                docs.append(Document(page_content=content))
+
+        else:
+            raise ValueError(f"Unsupported file type: {ext}")
+
+        if not docs:
+            raise ValueError("No valid documents found in the file.")
+
         chunks = self.text_splitter.split_documents(docs)
         chunks = filter_complex_metadata(chunks)
 
-        file_name = os.path.basename(pdf_file_path)
+        file_name = os.path.basename(file_path)
         for chunk in chunks:
             chunk.metadata['source_file'] = file_name
 
@@ -108,7 +139,6 @@ class ChatPDF:
         self.clear()
         time.sleep(0.5)
         gc.collect()
-
         if os.path.exists(self.db_path):
             try:
                 shutil.rmtree(self.db_path, onerror=self._handle_remove_readonly)
@@ -126,5 +156,5 @@ class ChatPDF:
 
     def ask(self, query: str):
         if not self.chain:
-            return "Please, add a PDF document first."
+            return "Please, add a PDF or JSON document first."
         return self.chain.invoke(query)
