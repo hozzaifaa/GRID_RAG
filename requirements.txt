@@ -7,3 +7,5 @@ langchain-chroma
 chromadb>=0.4.14
 pypdf
 fastembed
+jq
+langdetect>=1.0.9
