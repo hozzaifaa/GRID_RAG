@@ -28,10 +28,15 @@ if uploaded_files:
                 tf.write(file.getbuffer())
                 file_path = tf.name
             try:
-                st.session_state.assistant.ingest(file_path)
+                if file.name.endswith(".pdf"):
+                    st.session_state.assistant.ingest(file_path)
+                elif file.name.endswith(".json"):
+                    st.session_state.assistant.ingest_json(file_path)
+                else:
+                    raise ValueError("Unsupported file type.")
                 st.session_state.uploaded_filenames.add(file.name)
-            except ValueError as e:
-                st.error(str(e))
+            except Exception as e:
+                st.error(f"Failed to ingest {file.name}: {e}")
             finally:
                 os.remove(file_path)
 
