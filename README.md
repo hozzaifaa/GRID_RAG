@@ -139,6 +139,14 @@ Your browser will open automatically or show a local link (e.g., http://localhos
 4. Use **🗑️ Delete All Data** to reset and clear vector memory
 
 ---
+## 🔄 What's New in v2.1.0
+
+- ✅ **General JSON Support**: Ingest both `defectList[]` (e.g., MRT damage logs) and `category[].elements[]` (e.g., masonry catalog).
+- ✅ **Prompt Improvements**: Short, clear, paragraph-only answers. Avoids repetition, bullets, and numbering.
+- ✅ **Flexible Retrieval**: Loosened similarity threshold for better JSON matching.
+- ✅ **Cleaner UI Flow**: Auto-detection of PDF vs. JSON during upload; graceful error handling.
+- ✅ **Automatic Truncation**: Ensures concise 3-sentence answers even if the model overruns.
+---
 
 ## 📄 License
 

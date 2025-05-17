@@ -3,6 +3,7 @@ import shutil
 import time
 import gc
 import stat
+import json
 
 from chromadb.config import Settings as ChromaSettings
 
@@ -14,6 +15,7 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.prompts import PromptTemplate
+from langchain.schema import Document
 from langchain_community.vectorstores.utils import filter_complex_metadata
 
 VECTOR_DB_PATH = os.path.join("vectorstores", "default")
@@ -24,16 +26,14 @@ class ChatPDF:
     def __init__(self):
         self.model = ChatOllama(model="mistral")
         self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1024, chunk_overlap=100)
-        self.prompt = PromptTemplate.from_template(
-            """
-            <s> [INST] You are an assistant for question-answering tasks. Use the following pieces of retrieved context 
-            to answer the question. If you don't know the answer, just say that you don't know. Use three sentences
-             maximum and keep the answer concise. [/INST] </s> 
-            [INST] Question: {question} 
-            Context: {context} 
-            Answer: [/INST]
-            """
-        )
+        self.prompt = PromptTemplate.from_template("""
+<s>[INST] You are a helpful assistant. Answer the question using only the provided context.
+
+Do not number your sentences. Do not start sentences with digits. Do not use line breaks, lists, or formatting like "1.", "2.", or "3.". Your response must be written as a single, compact paragraph, with a maximum of three sentences. Avoid repeating values or IDs. If the answer is not in the context, respond with: "The answer is not available in the provided documents." [/INST]</s>
+[INST] Question: {question}
+Context: {context}
+Answer: [/INST]
+""")
         self.db_path = VECTOR_DB_PATH
         self.vector_store = None
         self.retriever = None
@@ -44,7 +44,7 @@ class ChatPDF:
         return ChromaSettings(
             persist_directory=self.db_path,
             allow_reset=True,
-            anonymized_telemetry=False  # ✅ correct, safe setting
+            anonymized_telemetry=False
         )
 
     def _load_vector_store(self):
@@ -56,7 +56,7 @@ class ChatPDF:
             )
             self.retriever = self.vector_store.as_retriever(
                 search_type="similarity_score_threshold",
-                search_kwargs={"k": 3, "score_threshold": 0.5},
+                search_kwargs={"k": 5, "score_threshold": 0.3}
             )
             self.chain = (
                 {"context": self.retriever, "question": RunnablePassthrough()}
@@ -88,6 +88,54 @@ class ChatPDF:
         self._log_uploaded_file(file_name)
         self._load_vector_store()
 
+    def ingest_json(self, json_path: str):
+        def extract_documents(data):
+            docs = []
+
+            # Case 1: JSON with "defectList"
+            if isinstance(data, dict) and "defectList" in data:
+                for entry in data["defectList"]:
+                    lines = [f"{k}: {v}" for k, v in entry.items()]
+                    doc_text = "\n".join(lines)
+                    docs.append(Document(
+                        page_content=doc_text,
+                        metadata={"source": os.path.basename(json_path)}
+                    ))
+
+            # Case 2: JSON with "category[].elements[]"
+            elif isinstance(data, dict) and "category" in data:
+                for cat in data["category"]:
+                    if isinstance(cat, dict) and "elements" in cat:
+                        for entry in cat["elements"]:
+                            lines = [f"{k}: {v}" for k, v in entry.items()]
+                            doc_text = "\n".join(lines)
+                            docs.append(Document(
+                                page_content=doc_text,
+                                metadata={"source": os.path.basename(json_path)}
+                            ))
+
+            return docs
+
+        with open(json_path, 'r', encoding='utf-8-sig') as f:
+            json_data = json.load(f)
+
+        docs = extract_documents(json_data)
+        if not docs:
+            raise ValueError("The JSON file does not contain 'defectList' or 'elements' entries to process.")
+
+        if not self.vector_store:
+            self.vector_store = Chroma.from_documents(
+                documents=docs,
+                embedding=FastEmbedEmbeddings(),
+                persist_directory=self.db_path,
+                client_settings=self._chroma_settings()
+            )
+        else:
+            self.vector_store.add_documents(docs)
+
+        self._log_uploaded_file(os.path.basename(json_path))
+        self._load_vector_store()
+
     def _log_uploaded_file(self, file_name: str):
         if not os.path.exists(UPLOADED_FILES_LOG):
             with open(UPLOADED_FILES_LOG, 'w') as f:
@@ -108,7 +156,6 @@ class ChatPDF:
         self.clear()
         time.sleep(0.5)
         gc.collect()
-
         if os.path.exists(self.db_path):
             try:
                 shutil.rmtree(self.db_path, onerror=self._handle_remove_readonly)
@@ -126,5 +173,10 @@ class ChatPDF:
 
     def ask(self, query: str):
         if not self.chain:
-            return "Please, add a PDF document first."
-        return self.chain.invoke(query)
+            return "Please, add a PDF or JSON document first."
+        response = self.chain.invoke(query)
+
+        # Optional: truncate to 3 sentences if model output overruns
+        sentences = response.strip().split(".")
+        trimmed = ". ".join(sentences[:3]).strip()
+        return trimmed + "." if not trimmed.endswith(".") else trimmed
